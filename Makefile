@@ -1,4 +1,7 @@
 .PHONY: test
 test:
-	echo "Running tests..."
 	pytest -v tests
+
+.PHONY: serve
+serve:
+	python3.9 src/web_server.py

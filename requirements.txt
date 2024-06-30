@@ -1,7 +1,9 @@
 torch
 torchvision
 torchaudio
-numpy
+numpy==1.26.4
 matplotlib
 jupyter
 pytest
+flask
+Flask-Session
