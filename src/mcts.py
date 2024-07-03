@@ -13,42 +13,61 @@ class MCTSNode:
         self.prior = 0
 
 class MCTS:
-    def __init__(self, model, num_simulations=800, c_puct=1.0):
+    """
+    Monte Carlo Tree Search implementation for the game of Gomoku.
+
+    This class implements the MCTS algorithm, which is used to determine the best move
+    in a given game state. It uses a neural network model to evaluate positions and
+    guide the search.
+
+    Attributes:
+        model: A neural network model used for position evaluation and move prediction.
+        num_simulations: The number of simulations to run for each search.
+        c_puct: The exploration constant used in the UCB formula.
+    """
+
+    def __init__(self, model, num_simulations=800, c_puct=1.0, dirichlet_alpha=0.3, dirichlet_epsilon=0.25):
+        """
+        Initializes the MCTS object.
+
+        Args:
+            model: A neural network model for position evaluation and move prediction.
+            num_simulations: The number of simulations to run for each search.
+            c_puct: The exploration constant used in the UCB formula.
+        """
         self.model = model
         self.num_simulations = num_simulations
         self.c_puct = c_puct
+        self.dirichlet_alpha = dirichlet_alpha
+        self.dirichlet_epsilon = dirichlet_epsilon
 
     def search(self, game):
-        """
-        Performs Monte Carlo Tree Search from the given game state.
-
-        This method builds a search tree by repeatedly selecting, expanding,
-        and evaluating nodes. It balances exploration and exploitation to find
-        the most promising moves.
-        """
-        if game.is_game_over():
+        if game.is_game_over() or not game.get_legal_moves():
             return None
 
         root = MCTSNode(game)
+
+        legal_moves = game.get_legal_moves()
+        noise = np.random.dirichlet([self.dirichlet_alpha] * len(legal_moves))
+
+        for move, prob in self.get_policy(game):
+            if move in root.children:
+                root.children[move].prior = (1 - self.dirichlet_epsilon) * prob + self.dirichlet_epsilon * noise[legal_moves.index(move)]
 
         for _ in range(self.num_simulations):
             node = root
             search_path = [node]
 
-            # Selection: traverse the tree to a leaf node
             while node.children and not node.game.is_game_over():
                 node = self.select_child(node)
                 search_path.append(node)
 
-            # Expansion and evaluation
             if not node.game.is_game_over():
                 self.expand_node(node)
                 node = self.select_child(node)
                 search_path.append(node)
 
             value = self.evaluate(node.game)
-
-            # Backpropagation: update statistics for all nodes in the search path
             self.backpropagate(search_path, value)
 
         return self.select_action(root)
@@ -122,10 +141,27 @@ class MCTS:
             action = actions[np.argmax(visits)]
             probs = [0] * len(actions)
             probs[actions.index(action)] = 1
-            return actions, probs
+            return [(a, p) for a, p in zip(actions, probs)]
 
         visits = [v ** (1. / temperature) for v in visits]
         total = sum(visits)
         probs = [v / total for v in visits]
 
-        return actions, probs
+        return [(a, p) for a, p in zip(actions, probs)]
+
+    def get_best_move(self, game):
+        root = MCTSNode(game)
+        return self.search(game)
+
+    def select_action_with_temperature(self, root, temperature):
+        visits = [child.visit_count for child in root.children.values()]
+        actions = list(root.children.keys())
+
+        if temperature == 0:
+            return actions[np.argmax(visits)]
+
+        visits = [v ** (1. / temperature) for v in visits]
+        total = sum(visits)
+        probs = [v / total for v in visits]
+
+        return np.random.choice(actions, p=probs)

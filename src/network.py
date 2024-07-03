@@ -163,6 +163,20 @@ class GomokuNet(nn.Module):
         # Convert to PyTorch tensor and add batch dimension
         return torch.from_numpy(input_tensor).unsqueeze(0)
 
+    def loss(self, policy_output, value_output, policy_targets, value_targets):
+        """
+        Compute the combined loss for policy and value outputs.
+
+        :param policy_output: Predicted policy (move probabilities)
+        :param value_output: Predicted value of the position
+        :param policy_targets: True policy (from MCTS)
+        :param value_targets: True game outcome
+        :return: Combined loss (scalar)
+        """
+        policy_loss = F.cross_entropy(policy_output, policy_targets)
+        value_loss = F.mse_loss(value_output, value_targets)
+        return policy_loss + value_loss
+
 class GomokuDataset(Dataset):
     def __init__(self, board_states, policies, values):
         self.board_states = board_states
