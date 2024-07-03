@@ -1,6 +1,8 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
 class ResidualBlock(nn.Module):
@@ -80,32 +82,141 @@ class GomokuNet(nn.Module):
         # Shape of value: (N, 1)
         return policy, value
 
-def prepare_input(board, current_player, move_number, last_move):
-    board_size = board.shape[0]
-    # Create a tensor with 5 channels and the size of the board
-    input_tensor = np.zeros((5, board_size, board_size), dtype=np.float32)
+    def save_model(self, filepath):
+        directory = os.path.dirname(filepath)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        torch.save(self.state_dict(), filepath)
+        print(f"Model saved to {filepath}")
 
-    # First channel: player 1's pieces
-    # Values: 1.0 if cell contains player 1's piece, otherwise 0.0
-    input_tensor[0][board == 1] = 1.0
+    def load_model(self, filepath):
+        if os.path.exists(filepath):
+            self.load_state_dict(torch.load(filepath))
+            print(f"Model loaded from {filepath}")
+        else:
+            print(f"No model found at {filepath}")
 
-    # Second channel: player 2's pieces
-    # Values: 1.0 if cell contains player 2's piece, otherwise 0.0
-    input_tensor[1][board == 2] = 1.0
+    def predict_policy(self, game):
+        """
+        Predicts the policy (move probabilities) for the given game state.
 
-    # Third channel: current player
-    # Values: 1.0 for all cells if current player is 1, otherwise 0.0
-    input_tensor[2][:] = 1.0 if current_player == 1 else 0.0
+        :param game: A Gomoku game instance
+        :return: A list of (move, probability) tuples
+        """
+        board_tensor = self.prepare_input(game)
+        with torch.no_grad():
+            policy, _ = self(board_tensor)
 
-    # Fourth channel: move number (normalized)
-    # Values: move_number / (board_size * board_size)
-    input_tensor[3][:] = move_number / (board_size * board_size)
+        # Convert policy to probabilities
+        policy = F.softmax(policy.squeeze(), dim=0).cpu().numpy()
 
-    # Fifth channel: last move
-    # Values: 1.0 for the cell of the last move, otherwise 0.0
-    if last_move:
-        input_tensor[4][last_move[0], last_move[1]] = 1.0
+        # Create a list of (move, probability) tuples for all legal moves
+        moves = game.get_legal_moves()
+        move_probs = [(move, policy[move[0] * self.board_size + move[1]]) for move in moves]
 
-    # Add batch dimension and convert to PyTorch tensor
-    # Final shape: (1, 5, board_size, board_size)
-    return torch.tensor(input_tensor, dtype=torch.float32).unsqueeze(0)
+        # Normalize probabilities to sum to 1
+        total_prob = sum(prob for _, prob in move_probs)
+        move_probs = [(move, prob / total_prob) for move, prob in move_probs]
+
+        return move_probs
+
+    def predict_value(self, game):
+        """
+        Predicts the value of the given game state.
+
+        :param game: A Gomoku game instance
+        :return: A float value between -1 and 1
+        """
+        board_tensor = self.prepare_input(game)
+        with torch.no_grad():
+            _, value = self(board_tensor)
+        return value.item()
+
+    def prepare_input(self, game):
+        """
+        Prepares the input tensor for the neural network from the game state.
+
+        :param game: A Gomoku game instance
+        :return: A tensor of shape (1, 5, board_size, board_size)
+        """
+        # Create a tensor with 5 channels
+        input_tensor = np.zeros((5, self.board_size, self.board_size), dtype=np.float32)
+
+        # First channel: player 1's pieces
+        input_tensor[0] = (game.board == 1).astype(np.float32)
+
+        # Second channel: player 2's pieces
+        input_tensor[1] = (game.board == 2).astype(np.float32)
+
+        # Third channel: current player
+        input_tensor[2] = np.full((self.board_size, self.board_size),
+                                  game.current_player == 1, dtype=np.float32)
+
+        # Fourth channel: move number (normalized)
+        input_tensor[3] = np.full((self.board_size, self.board_size),
+                                  game.move_count / (self.board_size ** 2), dtype=np.float32)
+
+        # Fifth channel: last move
+        if game.last_move:
+            input_tensor[4, game.last_move[0], game.last_move[1]] = 1.0
+
+        # Convert to PyTorch tensor and add batch dimension
+        return torch.from_numpy(input_tensor).unsqueeze(0)
+
+class GomokuDataset(Dataset):
+    def __init__(self, board_states, policies, values):
+        self.board_states = board_states
+        self.policies = policies
+        self.values = values
+
+    def __len__(self):
+        return len(self.board_states)
+
+    def __getitem__(self, idx):
+        return self.board_states[idx], self.policies[idx], self.values[idx]
+
+def create_data_loader(board_states, policies, values, batch_size=32):
+    dataset = GomokuDataset(board_states, policies, values)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+def train_model(model, optimizer, board_states, policies, values, epochs=10, batch_size=32, device='cpu'):
+    """
+    Trains the model on the provided data.
+
+    :param model: GomokuNet model to train
+    :param optimizer: Optimizer for updating model weights
+    :param board_states: List of board states (input to the model)
+    :param policies: List of policy targets
+    :param values: List of value targets
+    :param epochs: Number of training epochs
+    :param batch_size: Batch size for training
+    :param device: Device for training ('cpu' or 'cuda')
+    """
+    model.to(device)
+    model.train()
+
+    data_loader = create_data_loader(board_states, policies, values, batch_size)
+
+    for epoch in range(epochs):
+        total_loss = 0
+        for batch in data_loader:
+            board_states_batch, policy_targets, value_targets = batch
+            board_states_batch = board_states_batch.to(device)
+            policy_targets = policy_targets.to(device)
+            value_targets = value_targets.to(device)
+
+            optimizer.zero_grad()
+            policy_output, value_output = model(board_states_batch)
+
+            policy_loss = F.cross_entropy(policy_output, policy_targets)
+            value_loss = F.mse_loss(value_output, value_targets)
+            loss = policy_loss + value_loss
+
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(data_loader):.4f}")
+
+    print("Training completed")

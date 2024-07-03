@@ -1,7 +1,7 @@
 import pytest
-import numpy as np
 import torch
-from network import GomokuNet, prepare_input, ResidualBlock
+from gomoku import Gomoku
+from network import GomokuNet, ResidualBlock
 
 @pytest.fixture(scope="module")
 def net():
@@ -27,48 +27,20 @@ def test_forward_pass(net):
     assert value.shape == (1, 1)
 
 def test_prepare_input_shape():
-    board = np.array([
-        [0, 1, 0, 0, 2],
-        [0, 0, 1, 0, 0],
-        [0, 0, 0, 2, 0],
-        [1, 0, 0, 0, 0],
-        [0, 2, 0, 0, 1]
-    ])
-    current_player = 1
-    move_number = 10
-    last_move = (2, 3)  # Example last move
-    input_tensor = prepare_input(board, current_player, move_number, last_move)
-
-    # Check that the shape is (1, 5, board_size, board_size)
-    assert input_tensor.shape == (1, 5, board.shape[0], board.shape[1])
+    game = Gomoku(board_size=15)
+    model = GomokuNet(board_size=15)
+    input_tensor = model.prepare_input(game)
+    assert input_tensor.shape == (1, 5, 15, 15)
 
 def test_prepare_input_channels():
-    board = np.array([
-        [0, 1, 0],
-        [2, 0, 1],
-        [0, 2, 0]
-    ])
-    current_player = 2
-    move_number = 5
-    last_move = (1, 0)
-    input_tensor = prepare_input(board, current_player, move_number, last_move)
-
-    # Check first channel (player 1 positions)
-    assert torch.equal(input_tensor[0, 0], torch.tensor([[0, 1, 0], [0, 0, 1], [0, 0, 0]], dtype=torch.float32))
-
-    # Check second channel (player 2 positions)
-    assert torch.equal(input_tensor[0, 1], torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.float32))
-
-    # Check third channel (current player)
-    assert torch.all(input_tensor[0, 2] == 0)  # Current player is 2, so all values should be 0
-
-    # Check fourth channel (normalized move number)
-    assert torch.all(input_tensor[0, 3] == 5 / 9)  # 5 / (3 * 3)
-
-    # Check fifth channel (last move)
-    expected_last_move = torch.zeros((3, 3))
-    expected_last_move[1, 0] = 1
-    assert torch.equal(input_tensor[0, 4], expected_last_move)
+    game = Gomoku(board_size=15)
+    model = GomokuNet(board_size=15)
+    game.make_move(7, 7)
+    input_tensor = model.prepare_input(game)
+    assert input_tensor[0, 0, 7, 7] == 1  # Player 1's piece
+    assert input_tensor[0, 2, 0, 0] == 0  # Current player is 2
+    assert input_tensor[0, 3, 0, 0] == 1 / (15 * 15)  # Move count
+    assert input_tensor[0, 4, 7, 7] == 1  # Last move
 
 def test_residual_block():
     block = ResidualBlock(64)

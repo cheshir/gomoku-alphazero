@@ -1,7 +1,7 @@
 from flask import Flask, render_template, jsonify, request
 import numpy as np
 import torch
-from network import GomokuNet, prepare_input
+from network import GomokuNet
 from gomoku import Gomoku
 
 app = Flask(__name__, template_folder='../templates', static_folder='../static')
@@ -32,7 +32,7 @@ def move():
     if game.make_move(row, col):
         board = game.board
         move_number = np.sum(board != 0)
-        input_tensor = prepare_input(board, current_player, move_number)
+        input_tensor = model.prepare_input(board, current_player, move_number)
 
         with torch.no_grad():
             policy, _ = model(input_tensor)
