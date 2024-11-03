@@ -29,38 +29,46 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function makeMove(row, col) {
+        showLoading();
         axios.post("/move", {
             row: parseInt(row),
-            col: parseInt(col),
-            current_player: currentPlayer
+            col: parseInt(col)
         })
         .then(response => {
             const data = response.data;
             if (data.error) {
                 alert(data.error);
             } else {
-                updateBoard(data.board);
+                updateBoard(data.board, data.last_move);
                 currentPlayer = data.current_player;
                 updateStatus(data.winner);
             }
+            hideLoading();
         })
-        .catch(error => console.error("Error:", error));
+        .catch(error => {
+            console.error("Error:", error);
+            hideLoading();
+        });
     }
 
-    function updateBoard(board) {
+    function updateBoard(board, lastMove) {
         const cells = document.querySelectorAll(".cell");
         cells.forEach(cell => {
             const row = cell.dataset.row;
             const col = cell.dataset.col;
             const value = board[row][col];
+            cell.classList.remove("last-move");
             if (value === 1) {
                 cell.textContent = "X";
-                cell.style.color = "#ff0000";  // Red color for Player 1
+                cell.style.color = "#ff0000";
             } else if (value === 2) {
                 cell.textContent = "O";
-                cell.style.color = "#0000ff";  // Blue color for Player 2
+                cell.style.color = "#0000ff";
             } else {
                 cell.textContent = "";
+            }
+            if (lastMove && lastMove[0] == row && lastMove[1] == col) {
+                cell.classList.add("last-move");
             }
         });
     }
@@ -75,6 +83,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    function updateSettings() {
+        const simulations = document.getElementById("mcts-simulations").value;
+        axios.post("/update_settings", { mcts_simulations: simulations })
+        .then(response => {
+            alert("Settings updated!");
+        })
+        .catch(error => console.error("Error:", error));
+    }
+
     function resetGame() {
         axios.post("/reset")
         .then(response => {
@@ -84,6 +101,14 @@ document.addEventListener("DOMContentLoaded", () => {
             statusElement.textContent = `Player ${currentPlayer}'s turn`;
         })
         .catch(error => console.error("Error:", error));
+    }
+
+    function showLoading() {
+        document.getElementById("loading").classList.remove("hidden");
+    }
+
+    function hideLoading() {
+        document.getElementById("loading").classList.add("hidden");
     }
 
     createBoard();

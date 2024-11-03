@@ -10,9 +10,16 @@
 <body>
     <div class="container">
         <h1>Gomoku</h1>
+        <div id="loading" class="hidden">Bot is thinking...</div>
         <div id="status">Player 1's turn</div>
         <div id="board"></div>
         <button onclick="resetGame()">Reset Game</button>
+
+        <div class="settings">
+            <label for="mcts-simulations">MCTS Simulations:</label>
+            <input type="number" id="mcts-simulations" value="800" min="100" max="10000">
+            <button onclick="updateSettings()">Update</button>
+        </div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/0.21.1/axios.min.js"></script>
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>

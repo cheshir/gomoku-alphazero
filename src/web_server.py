@@ -1,19 +1,21 @@
 from flask import Flask, render_template, jsonify, request
-import numpy as np
-import torch
+from mcts import MCTS
 from network import GomokuNet
 from gomoku import Gomoku
+import torch
 
 app = Flask(__name__, template_folder='../templates', static_folder='../static')
 
 # Initialize the model
 board_size = 15
 model = GomokuNet(board_size)
-#model.load_state_dict(torch.load("gomoku_model_final.pth"))
+model.load_state_dict(torch.load("gomoku_model_final.pth"))
 model.eval()
 
 # Initialize a new game
 game = Gomoku(board_size)
+
+mcts = MCTS(model, num_simulations=800)
 
 @app.route('/')
 def index():
@@ -24,39 +26,15 @@ def move():
     data = request.get_json()
     row = data['row']
     col = data['col']
-    current_player = data['current_player']
 
     if game.check_winner() != 0:
         return jsonify({'error': 'Game has ended'}), 400
 
     if game.make_move(row, col):
-        board = game.board
-        move_number = np.sum(board != 0)
-        input_tensor = model.prepare_input(board, current_player, move_number)
-
-        with torch.no_grad():
-            policy, _ = model(input_tensor)
-
-        np.set_printoptions(precision=3, suppress=True) # Ensure NumPy is initialized
-        policy = policy.squeeze().detach().cpu().numpy()  # Ensure tensor is detached and on CPU
-        # Remove invalid moves (positions already occupied) and normalize probabilities
-        valid_moves = (board == 0).flatten()
-        policy = np.where(valid_moves, policy, 0)  # Set probability to 0 for invalid moves
-
-        # Normalize policy
-        total_prob = np.sum(policy)
-        if total_prob > 0:
-            policy /= total_prob
-        else:
-            # Default to uniform distribution if no valid moves
-            policy = np.ones(board_size * board_size) * valid_moves / np.sum(valid_moves)
-
-        policy = np.maximum(policy, 0)  # Ensure no negative probabilities
-        policy /= np.sum(policy)  # Ensure the probabilities sum to 1
-
-        move = np.random.choice(board_size * board_size, p=policy)
-        row, col = divmod(move, board_size)
-        game.make_move(row, col)
+        if game.check_winner() == 0:
+            # Bot's turn
+            bot_move = mcts.get_best_move(game)
+            game.make_move(*bot_move)
 
         response = {
             'board': game.board.astype(int).tolist(),
@@ -66,6 +44,12 @@ def move():
         return jsonify(response)
     else:
         return jsonify({'error': 'Invalid move'}), 400
+
+@app.route('/update_settings', methods=['POST'])
+def update_settings():
+    data = request.get_json()
+    mcts.num_simulations = int(data['mcts_simulations'])
+    return jsonify({'success': True})
 
 @app.route('/reset', methods=['POST'])
 def reset():

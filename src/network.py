@@ -5,6 +5,37 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
+def augment_data(board_state, policy, board_size):
+    """
+    Augments a single board state and policy by applying rotations and flips.
+    Returns a list of augmented (board_state, policy) pairs.
+    """
+    augmented_data = []
+    
+    # Convert policy to 2D board representation
+    policy_2d = policy.reshape(board_size, board_size)
+    
+    # Apply rotations (0, 90, 180, 270 degrees)
+    for k in range(4):
+        rotated_board = np.rot90(board_state, k=k, axes=(-2, -1))
+        rotated_policy = np.rot90(policy_2d, k=k)
+        
+        # Add rotation
+        augmented_data.append((
+            rotated_board.copy(),
+            rotated_policy.flatten()
+        ))
+        
+        # Add flipped rotation
+        flipped_board = np.flip(rotated_board, axis=-1)
+        flipped_policy = np.flip(rotated_policy, axis=1)
+        augmented_data.append((
+            flipped_board.copy(),
+            flipped_policy.flatten()
+        ))
+        
+    return augmented_data
+
 class ResidualBlock(nn.Module):
     def __init__(self, channels):
         super(ResidualBlock, self).__init__()
@@ -28,6 +59,9 @@ class GomokuNet(nn.Module):
     def __init__(self, board_size=15, num_residual_blocks=10):
         super(GomokuNet, self).__init__()
         self.board_size = board_size
+        self.dropout = nn.Dropout(0.3)  # Add dropout for regularization
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.to(self.device)
 
         # Input layer
         self.conv_input = nn.Sequential(
@@ -58,13 +92,16 @@ class GomokuNet(nn.Module):
 
         # Value head
         self.value_head = nn.Sequential(
-            nn.Conv2d(256, 1, kernel_size=1),
-            nn.BatchNorm2d(1),
+            nn.Conv2d(256, 32, kernel_size=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(board_size * board_size, 256),
+            nn.Linear(32 * board_size * board_size, 256),
+            self.dropout,
             nn.ReLU(),
-            nn.Linear(256, 1),
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
             nn.Tanh()
         )
         # Input shape: (N, 256, board_size, board_size)
@@ -91,7 +128,7 @@ class GomokuNet(nn.Module):
 
     def load_model(self, filepath):
         if os.path.exists(filepath):
-            self.load_state_dict(torch.load(filepath))
+            self.load_state_dict(torch.load(filepath, map_location=self.device))
             print(f"Model loaded from {filepath}")
         else:
             print(f"No model found at {filepath}")
@@ -130,7 +167,7 @@ class GomokuNet(nn.Module):
         board_tensor = self.prepare_input(game)
         with torch.no_grad():
             _, value = self(board_tensor)
-        return value.item()
+        return value.cpu().item()
 
     def prepare_input(self, game):
         """
@@ -160,8 +197,8 @@ class GomokuNet(nn.Module):
         if game.last_move:
             input_tensor[4, game.last_move[0], game.last_move[1]] = 1.0
 
-        # Convert to PyTorch tensor and add batch dimension
-        return torch.from_numpy(input_tensor).unsqueeze(0)
+        # Convert to PyTorch tensor, add batch dimension, and move to device
+        return torch.from_numpy(input_tensor).unsqueeze(0).to(self.device)
 
     def loss(self, policy_output, value_output, policy_targets, value_targets):
         """
@@ -178,10 +215,30 @@ class GomokuNet(nn.Module):
         return policy_loss + value_loss
 
 class GomokuDataset(Dataset):
-    def __init__(self, board_states, policies, values):
-        self.board_states = board_states
-        self.policies = policies
-        self.values = values
+    def __init__(self, board_states, policies, values, board_size=15, use_augmentation=True):
+        self.board_size = board_size
+        self.use_augmentation = use_augmentation
+        
+        if use_augmentation:
+            # Apply data augmentation
+            augmented_states = []
+            augmented_policies = []
+            augmented_values = []
+            
+            for board_state, policy, value in zip(board_states, policies, values):
+                augmented_data = augment_data(board_state, policy, board_size)
+                for aug_state, aug_policy in augmented_data:
+                    augmented_states.append(aug_state)
+                    augmented_policies.append(aug_policy)
+                    augmented_values.append(value)  # Value remains unchanged for augmentations
+                    
+            self.board_states = augmented_states
+            self.policies = augmented_policies
+            self.values = augmented_values
+        else:
+            self.board_states = board_states
+            self.policies = policies
+            self.values = values
 
     def __len__(self):
         return len(self.board_states)
@@ -189,11 +246,11 @@ class GomokuDataset(Dataset):
     def __getitem__(self, idx):
         return self.board_states[idx], self.policies[idx], self.values[idx]
 
-def create_data_loader(board_states, policies, values, batch_size=32):
-    dataset = GomokuDataset(board_states, policies, values)
+def create_data_loader(board_states, policies, values, batch_size=32, board_size=15, use_augmentation=True):
+    dataset = GomokuDataset(board_states, policies, values, board_size, use_augmentation)
     return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-def train_model(model, optimizer, board_states, policies, values, epochs=10, batch_size=32, device='cpu'):
+def train_model(model, optimizer, board_states, policies, values, epochs=10, batch_size=32, device='cuda'):
     """
     Trains the model on the provided data.
 
@@ -206,10 +263,11 @@ def train_model(model, optimizer, board_states, policies, values, epochs=10, bat
     :param batch_size: Batch size for training
     :param device: Device for training ('cpu' or 'cuda')
     """
+    device = torch.device(device if torch.cuda.is_available() else 'cpu')
     model.to(device)
     model.train()
 
-    data_loader = create_data_loader(board_states, policies, values, batch_size)
+    data_loader = create_data_loader(board_states, policies, values, batch_size, model.board_size)
 
     for epoch in range(epochs):
         total_loss = 0
